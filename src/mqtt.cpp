@@ -21,6 +21,20 @@ uint8_t   maxcurrent[WB_CNT];
 boolean   callbackActive = false;
 
 
+static uint8_t getSignalQuality(int rssi)
+{
+		int quality = 0;
+		if (rssi <= -100) {
+				quality = 0;
+		} else if (rssi >= -50) {
+				quality = 100;
+		} else {
+				quality = 2 * (rssi + 100);
+		}
+		return quality;
+}
+
+
 void callback(char* topic, byte* payload, uint8_t length)
 {
 	callbackActive = true;
@@ -234,6 +248,26 @@ void mqtt_publish(uint8_t i) {
 
 	// topics for EVCC
 	snprintf_P(header, sizeof(header), PSTR("wbec/lp/%d"), cfgMqttLp[i]);
+
+    snprintf_P(topic, sizeof(topic), PSTR("%s/wbecversion"), header);
+	snprintf_P(value, sizeof(value), cfgWbecVersion);
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/pcbTemp"), header);
+	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][5]/10.0);
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/currLim"), header);
+	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][53]/10.0);
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiSignal"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), getSignalQuality(WiFi.RSSI()));
+	client.publish(topic, value, retain);
+	
+	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiRssi"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), WiFi.RSSI());
+	client.publish(topic, value, retain);
 
 	snprintf_P(topic, sizeof(topic), PSTR("%s/status"), header);
 	snprintf_P(value, sizeof(value), PSTR("%c"), status);
