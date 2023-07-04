@@ -9,9 +9,15 @@
 #include <mbComm.h>
 #include <PubSubClient.h>
 #include <pvAlgo.h>
+#include <rfid.h>
 
 
 const uint8_t m = 2;
+const char*   lastWillTopic  = "wbec/connection";
+const char*   lastWillMsgOff = "offline";
+const char*   lastWillMsgOn  = "online";
+const uint8_t lastWillQos    = 1;
+const bool	  lastWillRetain = true;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -46,6 +52,7 @@ void callback(char* topic, byte* payload, uint8_t length)
 	buffer[length] = '\0';			// add string termination
 	LOGN(m, "Received: %s, Payload: %s", topic, buffer)
 
+	// topics for openWB
 	if (strstr_P(topic, PSTR("openWB/lp/")) && strstr_P(topic, PSTR("/AConfigured"))) {
 		uint16_t val = atoi(buffer);
 		uint8_t lp  = topic[10] - '0'; 	// loadpoint nr.
@@ -66,7 +73,30 @@ void callback(char* topic, byte* payload, uint8_t length)
 			LOG(0, ", no box assigned", "");
 		}
 	}
+
+	// topics for openWB 2.0 (#75)
+	if (strstr_P(topic, PSTR("openWB/chargepoint/")) && strstr_P(topic, PSTR("/set/current"))) {
+		float val = atof(buffer);
+		uint8_t lp  = topic[19] - '0'; 	// loadpoint nr.
+		uint8_t i;
+		// search, which index fits to loadpoint, first element will be selected
+		for (i = 0; i < cfgCntWb; i++) {
+			if (cfgMqttLp[i] == lp) {break;}
+		}
+		if (cfgMqttLp[i] == lp) {
+			// openWB resolution is unclear (float with example value 12.34), wbec has 0.1A resolution
+			val = val * 10;
+			// set current
+			if (val == 0 || (val >= CURR_ABS_MIN && val <= CURR_ABS_MAX)) {
+				LOG(0, ", Write to box: %d Value: %d", i, (uint8_t)val)
+				lm_storeRequest(i, (uint8_t)val);
+			}
+		} else {
+			LOG(0, ", no box assigned", "");
+		}
+	}
 	
+	// topics for EVCC
 	if (strstr_P(topic, PSTR("wbec/lp/"))   && strstr_P(topic, PSTR("/maxcurrent"))) {
 		float val = atof(buffer);
 		uint8_t lp  = topic[8] - '0'; 	// loadpoint nr.
@@ -147,9 +177,9 @@ void reconnect() {
 	// Attempt to connect
 	boolean con = false;
 	if (strcmp(cfgMqttUser, "") != 0 && strcmp(cfgMqttPass, "") != 0) {
-		con = client.connect(clientId, cfgMqttUser, cfgMqttPass);
+		con = client.connect(clientId, cfgMqttUser, cfgMqttPass, lastWillTopic, lastWillQos, lastWillRetain, lastWillMsgOff);
 	} else {
-		con = client.connect(clientId);
+		con = client.connect(clientId, lastWillTopic, lastWillQos, lastWillRetain, lastWillMsgOff);
 	}
 	if (con)
 	{
@@ -208,9 +238,9 @@ void mqtt_publish(uint8_t i) {
 	}
 
 	// publish the contents of box i
-	char header[20];
-	char topic[40];
-	char value[15];
+	char header[30];
+	char topic[50];
+	char value[20];
 	
 	// topics for openWB
 	snprintf_P(header, sizeof(header), PSTR("openWB/set/lp/%d"), cfgMqttLp[i]);
@@ -245,6 +275,41 @@ void mqtt_publish(uint8_t i) {
 	}
 
 	LOG(m, "Publish to %s", header)
+
+	// topics for openWB 2.0 (#75)
+	snprintf_P(header, sizeof(header), PSTR("openWB/set/chargepoint/%d"), cfgMqttLp[i]);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/plug_state"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), ps?"true":"false");
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/charge_state"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), cs?"true":"false");
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/power"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), content[i][10]);
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/imported"), header);
+	snprintf_P(value, sizeof(value), PSTR("%ld"), ((uint32_t) content[i][13] << 16 | (uint32_t)content[i][14]) );
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/voltages"), header);
+	snprintf_P(value, sizeof(value), PSTR("[%d,%d,%d]"), content[i][6], content[i][7], content[i][8]);	// L1 = 6, L2 = 7, L3 = 8
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/currents"), header);
+	snprintf_P(value, sizeof(value), PSTR("[%.1f,%.1f,%.1f]"), (float)content[i][2]/10.0, (float)content[i][3]/10.0, (float)content[i][4]/10.0);	// L1 = 2, L2 = 3, L3 = 4
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/phases_in_use"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), cfgPvPhFactor / 23);
+	client.publish(topic, value, retain);
+	
+	snprintf_P(topic, sizeof(topic), PSTR("%s/get/rfid_tag"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), rfid_getLastID());
+	client.publish(topic, value, retain);
 
 	// topics for EVCC
 	snprintf_P(header, sizeof(header), PSTR("wbec/lp/%d"), cfgMqttLp[i]);
@@ -294,7 +359,41 @@ void mqtt_publish(uint8_t i) {
 		snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][ph+1]/10.0);	// L1 = 2, L2 = 3, L3 = 4
 		client.publish(topic, value, retain);
 	}
+	
+	for (uint8_t ph = 1; ph <= 3; ph++) {
+		snprintf_P(topic, sizeof(topic), PSTR("%s/voltL%d"), header, ph);
+		snprintf_P(value, sizeof(value), PSTR("%d"), content[i][ph+5]);	// L1 = 2, L2 = 3, L3 = 4
+		client.publish(topic, value, retain);
+	}
+	snprintf_P(topic, sizeof(topic), PSTR("%s/currLimit"), header);
+	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][53]/10.0);
+	client.publish(topic, value, retain);
 
+	snprintf_P(topic, sizeof(topic), PSTR("%s/pcbTemp"), header);
+	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][5]/10.0);
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/resCode"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), String(modbusResultCode[i], HEX));
+	client.publish(topic, value, retain);
+
+	int qrssi = WiFi.RSSI();     
+	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiRssi"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), qrssi);
+	client.publish(topic, value, retain);
+	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiChannel"), header);
+	snprintf_P(value, sizeof(value), PSTR("%d"), WiFi.channel());
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/plugState"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), ps?"true":"false");
+	client.publish(topic, value, retain);
+
+	snprintf_P(topic, sizeof(topic), PSTR("%s/chargeState"), header);
+	snprintf_P(value, sizeof(value), PSTR("%s"), cs?"true":"false");
+	client.publish(topic, value, retain);
+
+	
 	// publish values from inverter
 	if (strcmp(cfgInverterIp, "") != 0) {
 		snprintf_P(header, sizeof(header), PSTR("wbec/inverter"));
@@ -320,6 +419,9 @@ void mqtt_publish(uint8_t i) {
 		snprintf_P(value, sizeof(value), PSTR("%ld"), pv_getWatt());
 		client.publish(topic, value, retain);
 	}
+
+	// Wbec-Connection Status
+	client.publish(lastWillTopic, lastWillMsgOn, lastWillRetain);
 }
 
 void mqtt_log(const char *output, const char *msg) {
