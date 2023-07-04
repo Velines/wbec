@@ -10,6 +10,7 @@
 #include <PubSubClient.h>
 #include <pvAlgo.h>
 #include <rfid.h>
+#include <goEmulator.h>
 
 
 const uint8_t m = 2;
@@ -329,10 +330,6 @@ void mqtt_publish(uint8_t i) {
 	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiSignal"), header);
 	snprintf_P(value, sizeof(value), PSTR("%d"), getSignalQuality(WiFi.RSSI()));
 	client.publish(topic, value, retain);
-	
-	snprintf_P(topic, sizeof(topic), PSTR("%s/wifiRssi"), header);
-	snprintf_P(value, sizeof(value), PSTR("%d"), WiFi.RSSI());
-	client.publish(topic, value, retain);
 
 	snprintf_P(topic, sizeof(topic), PSTR("%s/status"), header);
 	snprintf_P(value, sizeof(value), PSTR("%c"), status);
@@ -369,10 +366,6 @@ void mqtt_publish(uint8_t i) {
 	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][53]/10.0);
 	client.publish(topic, value, retain);
 
-	snprintf_P(topic, sizeof(topic), PSTR("%s/pcbTemp"), header);
-	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)content[i][5]/10.0);
-	client.publish(topic, value, retain);
-
 	snprintf_P(topic, sizeof(topic), PSTR("%s/resCode"), header);
 	snprintf_P(value, sizeof(value), PSTR("%s"), String(modbusResultCode[i], HEX));
 	client.publish(topic, value, retain);
@@ -393,6 +386,9 @@ void mqtt_publish(uint8_t i) {
 	snprintf_P(value, sizeof(value), PSTR("%s"), cs?"true":"false");
 	client.publish(topic, value, retain);
 
+	snprintf_P(topic, sizeof(topic), PSTR("%s/energyC"), header);
+	snprintf_P(value, sizeof(value), PSTR("%.1f"), (float)goE_getEnergySincePlugged(i) / 1000.0);
+	client.publish(topic, value, retain);
 	
 	// publish values from inverter
 	if (strcmp(cfgInverterIp, "") != 0) {
